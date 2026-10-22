@@ -145,84 +145,31 @@ with st.sidebar:
         etiqueta = f"{p} {'mínimo' if tipo == 'min' else 'máximo'} (%)"
         limites[p] = (tipo, st.number_input(etiqueta, value=val, step=0.5))
 
-tab_muestra, tab_lote = st.tabs(["Muestra (TIFF)", "Lote (CSV)"])
+archivos = st.file_uploader(
+    "Subir las 4 bandas de una captura (MS_G, MS_R, MS_RE, MS_NIR)",
+    type=["tif", "tiff"], accept_multiple_files=True,
+)
+if archivos:
+    feats, bandas, caja, faltan = extraer_desde_tiffs(archivos, frac)
+    if faltan:
+        st.warning(f"Faltan bandas: {', '.join(faltan)}")
+    else:
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            st.image(compuesto_falso_color(bandas, caja), caption="Falso color NIR-R-G (ROI en amarillo)",
+                     use_container_width=True)
+        with c2:
+            st.subheader("Reflectancia media ROI")
+            st.dataframe(pd.Series(feats, name="Valor").round(4), use_container_width=True)
 
-# --- Muestra individual ----------------------------------------------------
-with tab_muestra:
-    archivos = st.file_uploader(
-        "Subir las 4 bandas de una captura (MS_G, MS_R, MS_RE, MS_NIR)",
-        type=["tif", "tiff"], accept_multiple_files=True,
-    )
-    if archivos:
-        feats, bandas, caja, faltan = extraer_desde_tiffs(archivos, frac)
-        if faltan:
-            st.warning(f"Faltan bandas: {', '.join(faltan)}")
+        if modelos:
+            pred = predecir(pd.DataFrame([feats]), modelos, features).iloc[0]
+            st.subheader("Predicción")
+            cols = st.columns(len(pred))
+            for col, (p, v) in zip(cols, pred.items()):
+                regla = limites.get(p)
+                estado = ("Cumple" if cumple(v, regla) else "No cumple") if regla else ""
+                col.metric(p, f"{v:.2f} %", estado,
+                           delta_color="normal" if estado == "Cumple" else "inverse")
         else:
-            c1, c2 = st.columns([3, 2])
-            with c1:
-                st.image(compuesto_falso_color(bandas, caja), caption="Falso color NIR-R-G (ROI en amarillo)",
-                         use_container_width=True)
-            with c2:
-                st.subheader("Reflectancia media ROI")
-                st.dataframe(pd.Series(feats, name="Valor").round(4), use_container_width=True)
-
-            if modelos:
-                pred = predecir(pd.DataFrame([feats]), modelos, features).iloc[0]
-                st.subheader("Predicción")
-                cols = st.columns(len(pred))
-                for col, (p, v) in zip(cols, pred.items()):
-                    regla = limites.get(p)
-                    estado = ("Cumple" if cumple(v, regla) else "No cumple") if regla else ""
-                    col.metric(p, f"{v:.2f} %", estado,
-                               delta_color="normal" if estado == "Cumple" else "inverse")
-            else:
-                st.info("Cargue un modelo en la barra lateral para obtener predicciones.")
-
-# --- Lote ------------------------------------------------------------------
-with tab_lote:
-    f_csv = st.file_uploader("CSV generado por paso0_extraer_bandas.py", type=["csv"])
-    if f_csv:
-        df = pd.read_csv(f_csv)
-        if COL["NDVI"] not in df and {COL["NIR"], COL["R"]} <= set(df):
-            df[COL["NDVI"]] = (df[COL["NIR"]] - df[COL["R"]]) / (df[COL["NIR"]] + df[COL["R"]]).clip(lower=1e-6)
-
-        if not modelos:
-            st.info("Cargue un modelo para predecir. Vista previa de datos:")
-            st.dataframe(df, use_container_width=True)
-        else:
-            faltan = [f for f in features if f not in df]
-            if faltan:
-                st.error(f"El CSV no tiene las columnas: {', '.join(faltan)}")
-            else:
-                pred = predecir(df, modelos, features)
-                estado = pd.Series(True, index=df.index)
-                for p in pred:
-                    if p in limites:
-                        estado &= pred[p].apply(lambda v, r=limites[p]: cumple(v, r))
-                res = pd.concat([df, pred.round(2).add_prefix("pred_")], axis=1)
-                res["Estado"] = np.where(estado, "Conforme", "No conforme")
-
-                n_ok = int(estado.sum())
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Muestras", len(res))
-                k2.metric("Conformes", n_ok)
-                k3.metric("No conformes", len(res) - n_ok)
-
-                st.dataframe(
-                    res.style.apply(
-                        lambda r: ["background-color: #fde2e2" if r["Estado"] == "No conforme" else ""] * len(r),
-                        axis=1,
-                    ),
-                    use_container_width=True,
-                )
-
-                for p in pred:
-                    st.markdown(f"**{p} predicha**")
-                    serie = pred[p].reset_index(drop=True)
-                    st.bar_chart(serie)
-                    if p in limites:
-                        tipo, lim = limites[p]
-                        st.caption(f"Límite {'mínimo' if tipo == 'min' else 'máximo'}: {lim} %")
-
-                st.download_button("Descargar resultados (CSV)", res.to_csv(index=False).encode("utf-8"),
-                                   "resultados_calidad.csv", "text/csv")
+            st.info("Cargue un modelo en la barra lateral para obtener predicciones.")

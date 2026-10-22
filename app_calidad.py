@@ -218,26 +218,15 @@ st.markdown(
     "a partir de capturas multiespectrales tomadas con dron, sin esperar el análisis de laboratorio."
 )
 
-with st.sidebar:
-    st.header("Modelo")
-    f_modelo = st.file_uploader(
-        "Archivo .joblib (opcional)", type=["joblib", "pkl"],
-        help="Si el repositorio ya incluye el modelo entrenado, se carga solo. "
-             "Aquí se puede probar otro modelo sin cambiar la página.",
-    )
-    modelos, features = {}, []
-    if f_modelo is None and MODELO_REPO.exists():
-        f_modelo = MODELO_REPO
-    if f_modelo:
-        try:
-            modelos, features = cargar_modelo(f_modelo)
-            st.success(f"Parámetros: {', '.join(modelos)}")
-            st.caption(f"Variables: {', '.join(features)}")
-        except Exception as e:
-            st.error(f"No se pudo cargar el modelo: {e}")
-    else:
-        st.info("Sin modelo cargado: se entregarán solo los datos de las bandas.")
+# El modelo solo se carga desde el repositorio (modelo_calidad.joblib); los visitantes no pueden cambiarlo
+modelos, features = {}, []
+if MODELO_REPO.exists():
+    try:
+        modelos, features = cargar_modelo(MODELO_REPO)
+    except Exception as e:
+        st.error(f"No se pudo cargar el modelo del repositorio: {e}")
 
+with st.sidebar:
     st.header("Captura")
     frac = st.slider(
         "Tamaño ROI central", 0.05, 0.9, 0.30, 0.05,
@@ -257,6 +246,10 @@ with st.sidebar:
 g1, g2 = st.columns(2)
 with g1:
     st.subheader("Cómo subir sus muestras")
+    st.warning(
+        "Cada foto debe contener **una sola muestra, centrada**. La página mide solo el recuadro central "
+        "de la imagen, así que si una foto tiene varias muestras en grilla, las mezclará en un único resultado."
+    )
     st.markdown(
         "1. Cree **una carpeta por muestra**, nombrada con su número (1, 2, 3...).\n"
         "2. Dentro de cada carpeta copie las **4 bandas TIFF** de la captura: "

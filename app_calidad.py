@@ -35,7 +35,9 @@ LIMITES_DEF = {
     "Ceniza": ("max", 16.0),
 }
 
-MODELO_REPO = Path(__file__).parent / "modelo_calidad.joblib"
+INSTITUCION = "Universidad de Piura"
+
+MODELO_REPO =Path(__file__).parent / "modelo_calidad.joblib"
 
 PATRON_BANDA =re.compile(r"MS_(G|R|RE|NIR)\.TIF{1,2}$", re.IGNORECASE)
 
@@ -120,11 +122,21 @@ def predecir(df_feats, modelos, features):
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Calidad harina de pescado", layout="wide")
 st.title("Control de calidad de harina de pescado")
-st.caption("Predicción de parámetros fisicoquímicos a partir de imágenes multiespectrales DJI Mavic 3M")
+st.caption(f"Predicción de parámetros fisicoquímicos a partir de imágenes multiespectrales DJI Mavic 3M · {INSTITUCION}")
+
+st.markdown(
+    "Esta página estima la **calidad de un lote de harina de pescado** (proteína, grasa, humedad y ceniza) "
+    "a partir de una sola captura multiespectral tomada con dron, sin esperar el análisis de laboratorio. "
+    "Suba las 4 bandas de la captura para ver la imagen procesada y el resultado."
+)
 
 with st.sidebar:
     st.header("Modelo")
-    f_modelo = st.file_uploader("Archivo .joblib (opcional)", type=["joblib", "pkl"])
+    f_modelo = st.file_uploader(
+        "Archivo .joblib (opcional)", type=["joblib", "pkl"],
+        help="Si el repositorio ya incluye el modelo entrenado, se carga solo. "
+             "Aquí se puede probar otro modelo sin cambiar la página.",
+    )
     modelos, features = ({}, [])
     if f_modelo is None and Path(MODELO_REPO).exists():
         f_modelo = MODELO_REPO  # modelo incluido en el repositorio: carga automática
@@ -137,9 +149,15 @@ with st.sidebar:
             st.error(f"No se pudo cargar el modelo: {e}")
 
     st.header("Captura")
-    frac = st.slider("Tamaño ROI central", 0.05, 0.9, 0.30, 0.05)
+    frac = st.slider(
+        "Tamaño ROI central", 0.05, 0.9, 0.30, 0.05,
+        help="Fracción de la imagen, al centro, que se usa para medir la muestra. "
+             "Se evita el borde para no incluir el envase ni el fondo.",
+    )
 
     st.header("Especificación")
+    st.caption("Límites contra los que se compara cada predicción para indicar si cumple. "
+               "Ajústelos a la especificación comercial que corresponda.")
     limites = {}
     for p, (tipo, val) in LIMITES_DEF.items():
         etiqueta = f"{p} {'mínimo' if tipo == 'min' else 'máximo'} (%)"
@@ -173,3 +191,56 @@ if archivos:
                            delta_color="normal" if estado == "Cumple" else "inverse")
         else:
             st.info("Cargue un modelo en la barra lateral para obtener predicciones.")
+
+# ---------------------------------------------------------------------------
+# Información del proyecto
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("¿Cómo funciona?")
+
+p1, p2, p3, p4 = st.columns(4)
+with p1:
+    st.markdown("**1. Captura**")
+    st.markdown(
+        "Se fotografía la muestra con un dron **DJI Mavic 3 Multispectral**, que registra cuatro bandas: "
+        "Verde (560 nm), Rojo (650 nm), Red Edge (730 nm) e Infrarrojo cercano (860 nm)."
+    )
+with p2:
+    st.markdown("**2. Procesamiento**")
+    st.markdown(
+        "Se recorta una región central (ROI) para medir solo la harina, se convierten los valores de 16 bits "
+        "a reflectancia (0 a 1) y se calcula el índice NDVI."
+    )
+with p3:
+    st.markdown("**3. Predicción**")
+    st.markdown(
+        "Un modelo de *machine learning* relaciona esa firma espectral con los resultados de laboratorio "
+        "y estima proteína, grasa, humedad y ceniza."
+    )
+with p4:
+    st.markdown("**4. Resultado**")
+    st.markdown(
+        "Cada valor se compara con los límites de especificación y se indica si la muestra cumple o no."
+    )
+
+with st.expander("Datos y entrenamiento"):
+    st.markdown(
+        "- Los modelos se entrenan con **contramuestras de cerca de 300 lotes de producción**, "
+        "cada una con su resultado de laboratorio certificado.\n"
+        "- Se parte por un solo parámetro, la **proteína**, y se amplía a los demás a medida que crece la base de datos.\n"
+        "- Se comparan modelos de complejidad creciente (regresión lineal, Random Forest, SVR, redes neuronales) "
+        "y se evalúan con el coeficiente de correlación (R) y el error cuadrático medio (RMSE).\n"
+        "- La referencia metodológica es una tesis que predice estos parámetros con imágenes **hiperespectrales** "
+        "e inteligencia artificial."
+    )
+
+with st.expander("Alcance y limitaciones"):
+    st.markdown(
+        "- El Mavic 3M registra **4 bandas**, frente a las cerca de 240 de una cámara hiperespectral. "
+        "Por eso la precisión esperada es menor que en los trabajos de referencia, a cambio de un equipo "
+        "más accesible y portátil.\n"
+        "- Los resultados son **estimaciones** y no reemplazan el análisis de laboratorio certificado.\n"
+        "- El proyecto está en desarrollo: los modelos se actualizan a medida que se incorporan más datos."
+    )
+
+st.caption(f"Proyecto de investigación · {INSTITUCION}")

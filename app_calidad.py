@@ -139,6 +139,7 @@ def evaluar(df, modelos, features, limites):
         return res, []
     ok = res["seg_ok"].fillna(False).astype(bool) & res[features].notna().all(axis=1)
     general = pd.Series(True, index=res.index)
+    motivos = pd.Series([[] for _ in range(len(res))], index=res.index)
     params = []
     for p, mdl in modelos.items():
         col = f"{p} estimada (%)"
@@ -147,18 +148,75 @@ def evaluar(df, modelos, features, limites):
             res.loc[ok, col] = np.round(np.ravel(mdl.predict(res.loc[ok, features])), 2)
         params.append(p)
         if p in limites:
+            tl, lim = limites[p]
             c_ok = res[col].apply(lambda v, r=limites[p]: bool(cumple(v, r)) if pd.notna(v) else False)
             res[f"{p} cumple"] = np.where(ok, np.where(c_ok, "Sí", "No"), "")
             general &= c_ok
+            for i in res.index[ok & ~c_ok]:
+                v = res.at[i, col]
+                motivos[i] = motivos[i] + [f"{p} {v:.2f} % ({'debajo del mínimo' if tl == 'min' else 'sobre el máximo'} "
+                                           f"de {lim:g} %)"]
     res["Calidad"] = np.where(~ok, "Sin datos", np.where(general, "Conforme", "No conforme"))
+    sin_datos = res["Revisar"].fillna("").replace("", "No se pudo medir la harina")
+    res["Motivo"] = np.where(~ok, sin_datos,
+                             np.where(general, "Cumple todos los límites", motivos.apply("; ".join)))
+    res.insert(res.columns.get_loc("Calidad") + 1, "Motivo", res.pop("Motivo"))
     return res, params
 
 
-def generar_excel(res, descripcion, info) -> bytes:
+def conclusiones(res, params, limites):
+    """Resumen en texto de por qué las muestras salen conformes o no conformes."""
+    if not params:
+        return []
+    medidas = res[res["Calidad"] != "Sin datos"]
+    n, n_no = len(medidas), int((medidas["Calidad"] == "No conforme").sum())
+    lineas = []
+    if n == 0:
+        return ["No se pudo medir ninguna muestra, así que no hay veredicto de calidad."]
+    if n_no == 0:
+        lineas.append(f"Las {n} muestras medidas cumplen todos los límites de la especificación.")
+    else:
+        lineas.append(f"{n_no} de {n} muestras medidas salen **no conformes**: cada una tiene al menos un parámetro "
+                      "estimado fuera de la especificación.")
+    causas = {}
+    for p in params:
+        if p not in limites or f"{p} cumple" not in medidas:
+            continue
+        tl, lim = limites[p]
+        fallan = medidas[medidas[f"{p} cumple"] == "No"]
+        if len(fallan):
+            causas[p] = len(fallan)
+            lado = "por debajo del mínimo" if tl == "min" else "por encima del máximo"
+            lineas.append(f"**{p}:** {len(fallan)} muestra(s) quedan {lado} de {lim:g} %. "
+                          f"El valor estimado va de {medidas[f'{p} estimada (%)'].min():.2f} a "
+                          f"{medidas[f'{p} estimada (%)'].max():.2f} % (promedio "
+                          f"{medidas[f'{p} estimada (%)'].mean():.2f} %).")
+    if causas and n_no:
+        principal, cuenta = max(causas.items(), key=lambda kv: kv[1])
+        if cuenta == n_no:
+            sin = medidas[[c for c in medidas if c.endswith("cumple") and not c.startswith(principal)]]
+            pasarian = int((sin == "Sí").all(axis=1).sum())
+            lineas.append(f"La causa común es **{principal}**: todas las no conformes fallan en ese parámetro. "
+                          f"Si solo se evaluaran los demás parámetros, {pasarian} de {n} cumplirían.")
+        rango = {p: medidas[f"{p} estimada (%)"].max() - medidas[f"{p} estimada (%)"].min() for p in causas}
+        if all(v < 1.5 for v in rango.values()):
+            lineas.append("El modelo estima valores muy parecidos para todas las muestras, por lo que el veredicto "
+                          "depende sobre todo de dónde cae ese promedio respecto al límite, más que de diferencias "
+                          "reales entre lotes.")
+    n_sd = int((res["Calidad"] == "Sin datos").sum())
+    if n_sd:
+        lineas.append(f"{n_sd} posición(es) quedaron **sin datos** porque no se encontró harina; revise la columna Motivo.")
+    lineas.append("Las estimaciones son experimentales y no reemplazan el análisis de laboratorio certificado.")
+    return lineas
+
+
+def generar_excel(res, descripcion, info, lineas=None) -> bytes:
     buf = io.BytesIO()
     ocultar = ["seg_ok", "toca_borde_foto"]
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         res.drop(columns=[c for c in ocultar if c in res]).to_excel(w, sheet_name="Resultados", index=False)
+        if lineas:
+            pd.DataFrame({"Conclusión": lineas}).to_excel(w, sheet_name="Conclusión", index=False)
         descripcion.to_excel(w, sheet_name="Descripción de capturas", index=False)
         pd.DataFrame(list(info.items()), columns=["Campo", "Valor"]).to_excel(w, sheet_name="Información", index=False)
         for ws in w.sheets.values():
@@ -170,6 +228,11 @@ def generar_excel(res, descripcion, info) -> bytes:
                 largo = max(len(str(c.value)) if c.value is not None else 0 for c in col)
                 ws.column_dimensions[col[0].column_letter].width = min(max(11, largo + 2), 45)
             ws.freeze_panes = "A2"
+        if "Conclusión" in w.sheets:
+            wc = w.sheets["Conclusión"]
+            wc.column_dimensions["A"].width = 110
+            for (c,) in wc.iter_rows(min_row=2):
+                c.alignment = Alignment(wrap_text=True, vertical="top")
         ws = w.sheets["Resultados"]
         for j, cab in enumerate([c.value for c in ws[1]], start=1):
             for (c,) in ws.iter_rows(min_row=2, min_col=j, max_col=j):
@@ -377,7 +440,16 @@ if capturas is not None:
 
         visibles = ["Carpeta", "Muestra", "Pocillo", "Revisar", "px_harina_usados",
                     "Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel"]
-        visibles += [c for c in res_eval if c.endswith(("estimada (%)", "cumple")) or c == "Calidad"]
+        visibles += [c for c in res_eval if c.endswith(("estimada (%)", "cumple")) or c in ("Calidad", "Motivo")]
+        # Calidad y Motivo primero, para que el porqué se vea sin desplazarse
+        if params:
+            visibles = ["Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo"] + \
+                [c for c in visibles if c not in ("Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo")]
+
+        lineas = conclusiones(res_eval, params, limites)
+        if lineas:
+            st.subheader("Conclusión")
+            st.markdown("\n".join(f"- {l}" for l in lineas))
 
         def colorear(v):
             if v in ("Sí", "Conforme"):
@@ -391,9 +463,12 @@ if capturas is not None:
         estado = [c for c in visibles if c.endswith("cumple") or c in ("Calidad", "Revisar")]
         formato = {c: "{:.4f}" for c in ("Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel")}
         formato.update({c: "{:.2f}" for c in visibles if c.endswith("(%)")})
+        formato["px_harina_usados"] = "{:.0f}"
+        st.markdown("**Detalle por muestra**")
         st.dataframe(res_eval[visibles].style.map(colorear, subset=estado).format(formato, na_rep=""),
                      use_container_width=True, hide_index=True,
-                     column_config={"Revisar": st.column_config.TextColumn(width="large")})
+                     column_config={"Revisar": st.column_config.TextColumn(width="medium"),
+                                    "Motivo": st.column_config.TextColumn(width="large")})
 
         info = {
             "Fecha de procesamiento": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -409,7 +484,8 @@ if capturas is not None:
 
         b1, b2 = st.columns(2)
         b1.download_button("Descargar resultados en Excel",
-                           generar_excel(res_eval, st.session_state["descripcion"], info),
+                           generar_excel(res_eval, st.session_state["descripcion"], info,
+                                         [re.sub(r"\*\*", "", l) for l in lineas]),
                            f"calidad_harina_{datetime.now():%Y%m%d_%H%M}.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
         b2.download_button("Descargar imágenes de control (ZIP)", zip_imagenes(imagenes),

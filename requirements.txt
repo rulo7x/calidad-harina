@@ -3,5 +3,8 @@ numpy
 pandas
 scikit-learn
 joblib
-tifffile
 openpyxl
+opencv-python-headless
+pillow
+scipy
+defusedxml

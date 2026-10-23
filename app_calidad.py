@@ -533,4 +533,4 @@ with st.expander("Alcance y limitaciones"):
         "- Los resultados son **estimaciones experimentales** y no reemplazan el análisis de laboratorio certificado.\n"
         "- El proyecto está en desarrollo: los modelos se actualizan a medida que se incorporan más datos."
     )
-st.caption(f"Proyecto de Mecanica Electrica · {INSTITUCION}")
+st.caption(f"Proyectos de Mecanica Electrica · {INSTITUCION}")

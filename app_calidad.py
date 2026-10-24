@@ -28,6 +28,7 @@ import pandas as pd
 import streamlit as st
 from openpyxl.styles import Alignment, Font, PatternFill
 
+import diseno as D
 import procesamiento as P
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,15 @@ LIMITES_DEF = {
     "Humedad": ("max", 10.0),
     "Ceniza": ("max", 16.0),
 }
+# Mientras no se conozcan los límites reales de la planta, el veredicto se marca como parcial.
+# Cuando pongas la especificación real en LIMITES_DEF, cambia esto a True.
+LIMITES_CONFIRMADOS = False
+SUF = "" if LIMITES_CONFIRMADOS else " (parcial)"
+REF = "" if LIMITES_CONFIRMADOS else " referencial"
+CONF, NOCONF = "Conforme" + SUF, "No conforme" + SUF
+AVISO_PARCIAL = ("Resultado parcial: todavía no se conocen los límites reales de la especificación. "
+                 "Los límites usados son referenciales, así que el veredicto Conforme / No conforme puede "
+                 "cambiar cuando se definan los límites de la planta.")
 TIPOS = ["Varias muestras (grilla)", "Una muestra"]
 
 VERDE, ROJO, AMBAR, GRIS = (PatternFill("solid", start_color=c) for c in ("C6EFCE", "FFC7CE", "FFEB9C", "EDEDED"))
@@ -154,9 +164,9 @@ def evaluar(df, modelos, features, limites):
             general &= c_ok
             for i in res.index[ok & ~c_ok]:
                 v = res.at[i, col]
-                motivos[i] = motivos[i] + [f"{p} {v:.2f} % ({'debajo del mínimo' if tl == 'min' else 'sobre el máximo'} "
+                motivos[i] = motivos[i] + [f"{p} {v:.2f} % ({'debajo del mínimo' if tl == 'min' else 'sobre el máximo'}{REF} "
                                            f"de {lim:g} %)"]
-    res["Calidad"] = np.where(~ok, "Sin datos", np.where(general, "Conforme", "No conforme"))
+    res["Calidad"] = np.where(~ok, "Sin datos", np.where(general, CONF, NOCONF))
     sin_datos = res["Revisar"].fillna("").replace("", "No se pudo medir la harina")
     res["Motivo"] = np.where(~ok, sin_datos,
                              np.where(general, "Cumple todos los límites", motivos.apply("; ".join)))
@@ -169,8 +179,8 @@ def conclusiones(res, params, limites):
     if not params:
         return []
     medidas = res[res["Calidad"] != "Sin datos"]
-    n, n_no = len(medidas), int((medidas["Calidad"] == "No conforme").sum())
-    lineas = []
+    n, n_no = len(medidas), int((medidas["Calidad"] == NOCONF).sum())
+    lineas = [] if LIMITES_CONFIRMADOS else [f"**{AVISO_PARCIAL.split(':')[0]}:**{AVISO_PARCIAL.split(':', 1)[1]}"]
     if n == 0:
         return ["No se pudo medir ninguna muestra, así que no hay veredicto de calidad."]
     if n_no == 0:
@@ -186,7 +196,7 @@ def conclusiones(res, params, limites):
         fallan = medidas[medidas[f"{p} cumple"] == "No"]
         if len(fallan):
             causas[p] = len(fallan)
-            lado = "por debajo del mínimo" if tl == "min" else "por encima del máximo"
+            lado = ("por debajo del mínimo" if tl == "min" else "por encima del máximo") + REF
             lineas.append(f"**{p}:** {len(fallan)} muestra(s) quedan {lado} de {lim:g} %. "
                           f"El valor estimado va de {medidas[f'{p} estimada (%)'].min():.2f} a "
                           f"{medidas[f'{p} estimada (%)'].max():.2f} % (promedio "
@@ -242,7 +252,7 @@ def generar_excel(res, descripcion, info, lineas=None) -> bytes:
                     c.number_format = "0.00"
                 if cab.endswith("cumple") or cab == "Calidad":
                     c.alignment = Alignment(horizontal="center")
-                    c.fill = {"Sí": VERDE, "Conforme": VERDE, "No": ROJO, "No conforme": ROJO}.get(c.value, GRIS)
+                    c.fill = {"Sí": VERDE, CONF: VERDE, "No": ROJO, NOCONF: ROJO}.get(c.value, GRIS)
                 if cab == "Revisar" and c.value:
                     c.fill = AMBAR
     return buf.getvalue()
@@ -258,15 +268,245 @@ def zip_imagenes(imagenes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Herramienta de análisis
+# ---------------------------------------------------------------------------
+def herramienta(modelos, features, limites):
+    """Pasos 1 a 4: subir, describir, procesar y descargar."""
+    st.markdown('<span class="marca-herramienta"></span>', unsafe_allow_html=True)
+
+    # --- Paso 1: guía y subida ------------------------------------------------------
+    st.markdown('<h3 class="paso-t">1. Prepare y suba sus fotos</h3>', unsafe_allow_html=True)
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown(
+            "Cada captura del Mavic 3M son **4 archivos TIFF** (`_MS_G`, `_MS_R`, `_MS_RE`, `_MS_NIR`). "
+            "Puede subir:\n"
+            "- **Una sola captura:** los 4 TIFF sueltos.\n"
+            "- **Varias capturas:** un **ZIP** con una carpeta numerada por captura (1, 2, 3...) "
+            "y los 4 TIFF dentro de cada una.\n\n"
+            "Cada foto puede tener **una sola muestra** o **varias muestras en grilla** (por ejemplo, una bandeja "
+            "de 4 × 4 platos). Eso lo indica en el paso 2."
+        )
+    with g2:
+        st.code("capturas.zip\n├── 1/\n│   ├── DJI_..._MS_G.TIF\n│   ├── DJI_..._MS_R.TIF\n"
+                "│   ├── DJI_..._MS_RE.TIF\n│   └── DJI_..._MS_NIR.TIF\n├── 2/\n│   └── ...\n└── 3/\n    └── ...",
+                language=None)
+
+    subidos = st.file_uploader("ZIP con las capturas, o los 4 TIFF de una captura",
+                               type=["zip", "tif", "tiff"], accept_multiple_files=True)
+
+    if not subidos:
+        st.session_state.pop("capturas", None)
+    else:
+        clave = tuple((f.name, f.size) for f in subidos)
+        if st.session_state.get("clave_subida") != clave:
+            tmp = tempfile.mkdtemp(prefix="harina_")
+            with st.spinner("Leyendo archivos..."):
+                capturas, incompletas = guardar_subida(subidos, Path(tmp))
+            st.session_state.update(clave_subida=clave, capturas=capturas, incompletas=incompletas)
+            st.session_state.pop("resultado", None)
+            st.session_state.pop("descripcion", None)
+
+    capturas = st.session_state.get("capturas")
+    if capturas is not None:
+        for msg in st.session_state.get("incompletas", []):
+            st.warning(f"Captura incompleta, se omitirá: {msg}")
+        if not capturas:
+            st.error("No se encontró ninguna captura con sus 4 bandas. Revise los nombres de los archivos.")
+            return
+        st.success(f"Se encontraron {len(capturas)} captura(s) completa(s).")
+
+        # --- Paso 2: describir ------------------------------------------------------
+        st.markdown('<h3 class="paso-t">2. Indique qué contiene cada foto</h3>', unsafe_allow_html=True)
+        st.markdown(
+            "Antes de procesar, indique si cada foto tiene **una muestra** o **varias en grilla**, cuántas filas y "
+            "columnas, **en qué esquina está la muestra 1** y si se numera **por filas o por columnas**. "
+            "Primero elija los valores generales; luego puede cambiar cualquier captura en la tabla."
+        )
+        d1, d2 = st.columns([3, 2])
+        with d1:
+            tipo = st.radio("¿Qué hay en cada foto?", TIPOS, horizontal=True)
+            if tipo == TIPOS[0]:
+                a, b = st.columns(2)
+                filas = a.number_input("Filas de platos", 1, 12, 4)
+                columnas = b.number_input("Columnas de platos", 1, 12, 4)
+                a, b = st.columns(2)
+                esquina = a.selectbox("La muestra 1 está en la esquina", P.ESQUINAS,
+                                      help="Tal como se ve en la foto del dron, no en la mesa.")
+                recorrido = b.selectbox("Se numera", P.RECORRIDOS,
+                                        help="Por filas: 1, 2, 3, 4 avanzan de lado a lado. "
+                                             "Por columnas: avanzan de arriba hacia abajo.")
+            else:
+                filas, columnas, esquina, recorrido = 1, 1, P.ESQUINAS[0], P.RECORRIDOS[0]
+            inicio = st.number_input("Número de la primera muestra", 0, 10**7, 1,
+                                     help="En la tabla puede poner otro número inicial por captura, o la lista "
+                                          "exacta de códigos si no son correlativos.")
+        with d2:
+            if tipo == TIPOS[0]:
+                st.markdown("**Así quedará la numeración en la foto**")
+                st.dataframe(mapa_numeracion(int(filas), int(columnas), esquina, recorrido, int(inicio)),
+                             use_container_width=True)
+            else:
+                st.info("Se tomará la zona de harina más grande de cada foto. "
+                        "Si la carpeta tiene un número, ese será el número de la muestra.")
+
+        base = tabla_descripcion(capturas, tipo, int(filas), int(columnas), esquina, recorrido, int(inicio))
+        st.markdown("**Descripción por captura** (edite las celdas si alguna foto es distinta)")
+        descripcion = st.data_editor(
+            base, hide_index=True, use_container_width=True, disabled=["Carpeta", "Captura"],
+            key=f"editor_{tipo}_{filas}_{columnas}_{esquina}_{recorrido}_{inicio}",
+            column_config={
+                "Tipo": st.column_config.SelectboxColumn(options=["Varias muestras (grilla)", "Una muestra"], required=True),
+                "Filas": st.column_config.NumberColumn(min_value=1, max_value=12, step=1),
+                "Columnas": st.column_config.NumberColumn(min_value=1, max_value=12, step=1),
+                "Muestra 1 en": st.column_config.SelectboxColumn(options=P.ESQUINAS, required=True),
+                "Recorrido": st.column_config.SelectboxColumn(options=P.RECORRIDOS, required=True),
+                "N° inicial": st.column_config.NumberColumn(min_value=0, step=1),
+                "Códigos (opcional)": st.column_config.TextColumn(
+                    help="Lista de códigos en el orden de numeración, separados por comas. Úsela si los lotes "
+                         "no son correlativos, por ejemplo: 212, 213, 215"),
+                "Excluir (opcional)": st.column_config.TextColumn(
+                    help="Posiciones sin plato o que no deben medirse, por ejemplo: F1C1, F4C4. "
+                         "No se miden ni se numeran."),
+            },
+        )
+
+        # --- Paso 3: procesar -------------------------------------------------------
+        st.markdown('<h3 class="paso-t">3. Procese y revise la segmentación</h3>', unsafe_allow_html=True)
+        if st.button("Procesar", type="primary"):
+            tablas, imagenes, avisos = [], {}, []
+            barra = st.progress(0.0)
+            for k, (cap, (_, fila)) in enumerate(zip(capturas, descripcion.iterrows()), start=1):
+                nombre = f"{cap['Carpeta']} / {cap['Captura']}"
+                barra.progress((k - 1) / len(capturas), text=f"Procesando {nombre} ({k} de {len(capturas)})")
+                una = fila["Tipo"] == "Una muestra"
+                cfg = {"tipo": "Una muestra" if una else "Grilla", "filas": fila["Filas"], "columnas": fila["Columnas"],
+                       "esquina": fila["Muestra 1 en"], "recorrido": fila["Recorrido"], "inicio": fila["N° inicial"],
+                       "excluir": P.leer_lista(fila["Excluir (opcional)"]),
+                       "codigos": P.leer_lista(fila["Códigos (opcional)"]) or None}
+                try:
+                    df, vis, av = P.procesar_captura(cap["archivos"], cap["Captura"], cfg)
+                    df.insert(0, "Carpeta", cap["Carpeta"])
+                    tablas.append(df)
+                    imagenes[nombre] = vis
+                    avisos += av
+                except Exception as e:
+                    avisos.append(f"{nombre}: {e}")
+            barra.empty()
+            res = pd.concat(tablas, ignore_index=True) if tablas else pd.DataFrame()
+            if "Revisar" in res:
+                res.insert(res.columns.get_loc("Columna") + 1, "Revisar", res.pop("Revisar").fillna(""))
+            st.session_state["resultado"] = (res, imagenes, avisos)
+            st.session_state["descripcion"] = descripcion.copy()
+
+        if "resultado" in st.session_state:
+            res, imagenes, avisos = st.session_state["resultado"]
+            for a in avisos:
+                st.warning(a)
+            if res.empty:
+                st.error("No se obtuvo ninguna muestra. Revise la descripción de las capturas.")
+                return
+
+            st.markdown("Verifique en cada imagen que **el contorno verde quede solo sobre la harina** y que "
+                        "**el número amarillo** corresponda a la muestra correcta. Si algo no calza, corrija la tabla "
+                        "del paso 2 y vuelva a procesar.")
+            nombres = list(imagenes)
+            if len(nombres) == 1:
+                st.image(imagenes[nombres[0]], caption=nombres[0], use_container_width=True)
+            else:
+                elegido = st.selectbox("Captura a revisar", nombres)
+                st.image(imagenes[elegido], caption=elegido, use_container_width=True)
+
+            # --- Paso 4: resultados ---------------------------------------------------
+            st.markdown('<h3 class="paso-t">4. Resultados</h3>', unsafe_allow_html=True)
+            res_eval, params = evaluar(res, modelos, features, limites)
+            n_rev = int((res_eval["Revisar"].fillna("") != "").sum())
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Muestras", len(res_eval))
+            k2.metric("Para revisar", n_rev)
+            if params:
+                k3.metric("Conformes" + SUF, int((res_eval["Calidad"] == CONF).sum()))
+                k4.metric("No conformes" + SUF, int((res_eval["Calidad"] == NOCONF).sum()))
+                if not LIMITES_CONFIRMADOS:
+                    st.warning(AVISO_PARCIAL)
+
+            visibles = ["Carpeta", "Muestra", "Pocillo", "Revisar", "px_harina_usados",
+                        "Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel"]
+            visibles += [c for c in res_eval if c.endswith(("estimada (%)", "cumple")) or c in ("Calidad", "Motivo")]
+            # Calidad y Motivo primero, para que el porqué se vea sin desplazarse
+            if params:
+                visibles = ["Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo"] + \
+                    [c for c in visibles if c not in ("Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo")]
+
+            lineas = conclusiones(res_eval, params, limites)
+            if lineas:
+                st.subheader("Conclusión")
+                en_pagina = lineas if LIMITES_CONFIRMADOS else lineas[1:]  # el aviso ya se muestra arriba
+                st.markdown("\n".join(f"- {l}" for l in en_pagina))
+
+            def colorear(v):
+                if v in ("Sí", CONF):
+                    return "background-color: #C6EFCE; color: #006100"
+                if v in ("No", NOCONF):
+                    return "background-color: #FFC7CE; color: #9C0006"
+                if isinstance(v, str) and v and v not in ("Sin datos",):
+                    return "background-color: #FFEB9C; color: #7A5200"
+                return ""
+
+            estado = [c for c in visibles if c.endswith("cumple") or c in ("Calidad", "Revisar")]
+            formato = {c: "{:.4f}" for c in ("Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel")}
+            formato.update({c: "{:.2f}" for c in visibles if c.endswith("(%)")})
+            formato["px_harina_usados"] = "{:.0f}"
+            st.markdown("**Detalle por muestra**")
+            st.dataframe(res_eval[visibles].style.map(colorear, subset=estado).format(formato, na_rep=""),
+                         use_container_width=True, hide_index=True,
+                         column_config={"Revisar": st.column_config.TextColumn(width="medium"),
+                                        "Motivo": st.column_config.TextColumn(width="large")})
+
+            info = {
+                "Fecha de procesamiento": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Capturas procesadas": len(imagenes),
+                "Muestras": len(res_eval),
+                "Segmentación": "Otsu local por plato, erosión de 25 px del borde, recorte de percentiles 2-98",
+                "Normalización": "Mediana de la harina dividida entre el blanco de la bandeja alrededor del plato (_rel)",
+                "Modelo": ", ".join(modelos) if params else "Sin modelo (solo datos de bandas)",
+            }
+            for p, (tl, lim) in limites.items():
+                info[f"Límite{REF} {p}"] = f"{'≥' if tl == 'min' else '≤'} {lim} %"
+            info["Estado de los límites"] = ("Confirmados" if LIMITES_CONFIRMADOS
+                                              else "Referenciales, no confirmados: resultado parcial")
+            info["Nota"] = "Valores estimados; no reemplazan el análisis de laboratorio certificado."
+
+            b1, b2 = st.columns(2)
+            b1.download_button("Descargar resultados en Excel",
+                               generar_excel(res_eval, st.session_state["descripcion"], info,
+                                             [re.sub(r"\*\*", "", l) for l in lineas]),
+                               f"calidad_harina_{datetime.now():%Y%m%d_%H%M}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+            b2.download_button("Descargar imágenes de control (ZIP)", zip_imagenes(imagenes),
+                               f"segmentacion_{datetime.now():%Y%m%d_%H%M}.zip", "application/zip")
+
+    with st.expander("Qué contiene el Excel"):
+        st.markdown(
+            "- **Resultados:** una fila por muestra con su carpeta, número, posición en la bandeja (FxCy), "
+            "una columna **Revisar** (plato vacío, harina cortada por el borde de la foto, etc.), los píxeles de harina "
+            "usados y, por banda, la reflectancia relativa al blanco (`_rel`) y su variación (`_cv`). También trae las "
+            "variables derivadas (logaritmos y diferencias normalizadas entre bandas) y, si hay modelo, la estimación de "
+            "cada parámetro, si cumple y la calidad general.\n"
+            "- **Descripción de capturas:** lo que se indicó en el paso 2 para cada foto.\n"
+            "- **Información:** fecha, método y límites usados."
+        )
+
+
+
+# ---------------------------------------------------------------------------
 # Página
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="Calidad harina de pescado", layout="wide")
-st.title("Control de calidad de harina de pescado")
-st.caption(f"Imágenes multiespectrales DJI Mavic 3M · {INSTITUCION}")
-st.markdown(
-    "Esta página ubica cada muestra de harina en las fotos multiespectrales del dron, **segmenta solo la harina** "
-    "(sin plato, bandeja ni mesa), mide sus cuatro bandas y entrega un **Excel con una fila por muestra**."
-)
+st.set_page_config(page_title="Calidad Harina · PME Grupo 09", page_icon="🐟", layout="wide",
+                   initial_sidebar_state="collapsed")
+D.estilos()
+D.portada(INSTITUCION)
+D.como_funciona()
 
 modelos, features = {}, []
 try:
@@ -274,263 +514,20 @@ try:
 except Exception as e:
     st.error(f"No se pudo cargar el modelo del repositorio: {e}")
 
-with st.sidebar:
-    st.header("Especificación")
-    st.caption("Límites contra los que se compara cada estimación para indicar si cumple.")
-    limites = {}
-    for p, (tipo_l, val) in LIMITES_DEF.items():
-        etiqueta = f"{p} {'mínimo' if tipo_l == 'min' else 'máximo'} (%)"
-        limites[p] = (tipo_l, st.number_input(etiqueta, value=val, step=0.5))
+D.cabecera_herramienta()
+with st.container(border=True, key="herramienta"):
+    with st.expander("Especificación de calidad" + ("" if LIMITES_CONFIRMADOS else " (límites referenciales)")):
+        st.caption("Límites contra los que se compara cada estimación para indicar si cumple.")
+        if not LIMITES_CONFIRMADOS:
+            st.caption("Aún no se conocen los límites reales de la planta, por eso el veredicto de calidad es parcial.")
+        limites = {}
+        cols = st.columns(len(LIMITES_DEF))
+        for c, (p, (tipo_l, val)) in zip(cols, LIMITES_DEF.items()):
+            etiqueta = f"{p} {'mínimo' if tipo_l == 'min' else 'máximo'} (%)"
+            limites[p] = (tipo_l, c.number_input(etiqueta, value=val, step=0.5))
     if not modelos:
         st.info("Todavía no hay modelo cargado: se entregarán solo los datos de las bandas.")
+    herramienta(modelos, features, limites)
 
-# --- Paso 1: guía y subida ------------------------------------------------------
-st.header("1. Prepare y suba sus fotos")
-g1, g2 = st.columns(2)
-with g1:
-    st.markdown(
-        "Cada captura del Mavic 3M son **4 archivos TIFF** (`_MS_G`, `_MS_R`, `_MS_RE`, `_MS_NIR`). "
-        "Puede subir:\n"
-        "- **Una sola captura:** los 4 TIFF sueltos.\n"
-        "- **Varias capturas:** un **ZIP** con una carpeta numerada por captura (1, 2, 3...) "
-        "y los 4 TIFF dentro de cada una.\n\n"
-        "Cada foto puede tener **una sola muestra** o **varias muestras en grilla** (por ejemplo, una bandeja "
-        "de 4 × 4 platos). Eso lo indica en el paso 2."
-    )
-with g2:
-    st.code("capturas.zip\n├── 1/\n│   ├── DJI_..._MS_G.TIF\n│   ├── DJI_..._MS_R.TIF\n"
-            "│   ├── DJI_..._MS_RE.TIF\n│   └── DJI_..._MS_NIR.TIF\n├── 2/\n│   └── ...\n└── 3/\n    └── ...",
-            language=None)
-
-subidos = st.file_uploader("ZIP con las capturas, o los 4 TIFF de una captura",
-                           type=["zip", "tif", "tiff"], accept_multiple_files=True)
-
-if not subidos:
-    st.session_state.pop("capturas", None)
-else:
-    clave = tuple((f.name, f.size) for f in subidos)
-    if st.session_state.get("clave_subida") != clave:
-        tmp = tempfile.mkdtemp(prefix="harina_")
-        with st.spinner("Leyendo archivos..."):
-            capturas, incompletas = guardar_subida(subidos, Path(tmp))
-        st.session_state.update(clave_subida=clave, capturas=capturas, incompletas=incompletas)
-        st.session_state.pop("resultado", None)
-        st.session_state.pop("descripcion", None)
-
-capturas = st.session_state.get("capturas")
-if capturas is not None:
-    for msg in st.session_state.get("incompletas", []):
-        st.warning(f"Captura incompleta, se omitirá: {msg}")
-    if not capturas:
-        st.error("No se encontró ninguna captura con sus 4 bandas. Revise los nombres de los archivos.")
-        st.stop()
-    st.success(f"Se encontraron {len(capturas)} captura(s) completa(s).")
-
-    # --- Paso 2: describir ------------------------------------------------------
-    st.header("2. Indique qué contiene cada foto")
-    st.markdown(
-        "Antes de procesar, indique si cada foto tiene **una muestra** o **varias en grilla**, cuántas filas y "
-        "columnas, **en qué esquina está la muestra 1** y si se numera **por filas o por columnas**. "
-        "Primero elija los valores generales; luego puede cambiar cualquier captura en la tabla."
-    )
-    d1, d2 = st.columns([3, 2])
-    with d1:
-        tipo = st.radio("¿Qué hay en cada foto?", TIPOS, horizontal=True)
-        if tipo == TIPOS[0]:
-            a, b = st.columns(2)
-            filas = a.number_input("Filas de platos", 1, 12, 4)
-            columnas = b.number_input("Columnas de platos", 1, 12, 4)
-            a, b = st.columns(2)
-            esquina = a.selectbox("La muestra 1 está en la esquina", P.ESQUINAS,
-                                  help="Tal como se ve en la foto del dron, no en la mesa.")
-            recorrido = b.selectbox("Se numera", P.RECORRIDOS,
-                                    help="Por filas: 1, 2, 3, 4 avanzan de lado a lado. "
-                                         "Por columnas: avanzan de arriba hacia abajo.")
-        else:
-            filas, columnas, esquina, recorrido = 1, 1, P.ESQUINAS[0], P.RECORRIDOS[0]
-        inicio = st.number_input("Número de la primera muestra", 0, 10**7, 1,
-                                 help="En la tabla puede poner otro número inicial por captura, o la lista "
-                                      "exacta de códigos si no son correlativos.")
-    with d2:
-        if tipo == TIPOS[0]:
-            st.markdown("**Así quedará la numeración en la foto**")
-            st.dataframe(mapa_numeracion(int(filas), int(columnas), esquina, recorrido, int(inicio)),
-                         use_container_width=True)
-        else:
-            st.info("Se tomará la zona de harina más grande de cada foto. "
-                    "Si la carpeta tiene un número, ese será el número de la muestra.")
-
-    base = tabla_descripcion(capturas, tipo, int(filas), int(columnas), esquina, recorrido, int(inicio))
-    st.markdown("**Descripción por captura** (edite las celdas si alguna foto es distinta)")
-    descripcion = st.data_editor(
-        base, hide_index=True, use_container_width=True, disabled=["Carpeta", "Captura"],
-        key=f"editor_{tipo}_{filas}_{columnas}_{esquina}_{recorrido}_{inicio}",
-        column_config={
-            "Tipo": st.column_config.SelectboxColumn(options=["Varias muestras (grilla)", "Una muestra"], required=True),
-            "Filas": st.column_config.NumberColumn(min_value=1, max_value=12, step=1),
-            "Columnas": st.column_config.NumberColumn(min_value=1, max_value=12, step=1),
-            "Muestra 1 en": st.column_config.SelectboxColumn(options=P.ESQUINAS, required=True),
-            "Recorrido": st.column_config.SelectboxColumn(options=P.RECORRIDOS, required=True),
-            "N° inicial": st.column_config.NumberColumn(min_value=0, step=1),
-            "Códigos (opcional)": st.column_config.TextColumn(
-                help="Lista de códigos en el orden de numeración, separados por comas. Úsela si los lotes "
-                     "no son correlativos, por ejemplo: 212, 213, 215"),
-            "Excluir (opcional)": st.column_config.TextColumn(
-                help="Posiciones sin plato o que no deben medirse, por ejemplo: F1C1, F4C4. "
-                     "No se miden ni se numeran."),
-        },
-    )
-
-    # --- Paso 3: procesar -------------------------------------------------------
-    st.header("3. Procese y revise la segmentación")
-    if st.button("Procesar", type="primary"):
-        tablas, imagenes, avisos = [], {}, []
-        barra = st.progress(0.0)
-        for k, (cap, (_, fila)) in enumerate(zip(capturas, descripcion.iterrows()), start=1):
-            nombre = f"{cap['Carpeta']} / {cap['Captura']}"
-            barra.progress((k - 1) / len(capturas), text=f"Procesando {nombre} ({k} de {len(capturas)})")
-            una = fila["Tipo"] == "Una muestra"
-            cfg = {"tipo": "Una muestra" if una else "Grilla", "filas": fila["Filas"], "columnas": fila["Columnas"],
-                   "esquina": fila["Muestra 1 en"], "recorrido": fila["Recorrido"], "inicio": fila["N° inicial"],
-                   "excluir": P.leer_lista(fila["Excluir (opcional)"]),
-                   "codigos": P.leer_lista(fila["Códigos (opcional)"]) or None}
-            try:
-                df, vis, av = P.procesar_captura(cap["archivos"], cap["Captura"], cfg)
-                df.insert(0, "Carpeta", cap["Carpeta"])
-                tablas.append(df)
-                imagenes[nombre] = vis
-                avisos += av
-            except Exception as e:
-                avisos.append(f"{nombre}: {e}")
-        barra.empty()
-        res = pd.concat(tablas, ignore_index=True) if tablas else pd.DataFrame()
-        if "Revisar" in res:
-            res.insert(res.columns.get_loc("Columna") + 1, "Revisar", res.pop("Revisar").fillna(""))
-        st.session_state["resultado"] = (res, imagenes, avisos)
-        st.session_state["descripcion"] = descripcion.copy()
-
-    if "resultado" in st.session_state:
-        res, imagenes, avisos = st.session_state["resultado"]
-        for a in avisos:
-            st.warning(a)
-        if res.empty:
-            st.error("No se obtuvo ninguna muestra. Revise la descripción de las capturas.")
-            st.stop()
-
-        st.markdown("Verifique en cada imagen que **el contorno verde quede solo sobre la harina** y que "
-                    "**el número amarillo** corresponda a la muestra correcta. Si algo no calza, corrija la tabla "
-                    "del paso 2 y vuelva a procesar.")
-        nombres = list(imagenes)
-        if len(nombres) == 1:
-            st.image(imagenes[nombres[0]], caption=nombres[0], use_container_width=True)
-        else:
-            elegido = st.selectbox("Captura a revisar", nombres)
-            st.image(imagenes[elegido], caption=elegido, use_container_width=True)
-
-        # --- Paso 4: resultados ---------------------------------------------------
-        st.header("4. Resultados")
-        res_eval, params = evaluar(res, modelos, features, limites)
-        n_rev = int((res_eval["Revisar"].fillna("") != "").sum())
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Muestras", len(res_eval))
-        k2.metric("Para revisar", n_rev)
-        if params:
-            k3.metric("Conformes", int((res_eval["Calidad"] == "Conforme").sum()))
-            k4.metric("No conformes", int((res_eval["Calidad"] == "No conforme").sum()))
-
-        visibles = ["Carpeta", "Muestra", "Pocillo", "Revisar", "px_harina_usados",
-                    "Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel"]
-        visibles += [c for c in res_eval if c.endswith(("estimada (%)", "cumple")) or c in ("Calidad", "Motivo")]
-        # Calidad y Motivo primero, para que el porqué se vea sin desplazarse
-        if params:
-            visibles = ["Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo"] + \
-                [c for c in visibles if c not in ("Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo")]
-
-        lineas = conclusiones(res_eval, params, limites)
-        if lineas:
-            st.subheader("Conclusión")
-            st.markdown("\n".join(f"- {l}" for l in lineas))
-
-        def colorear(v):
-            if v in ("Sí", "Conforme"):
-                return "background-color: #C6EFCE; color: #006100"
-            if v in ("No", "No conforme"):
-                return "background-color: #FFC7CE; color: #9C0006"
-            if isinstance(v, str) and v and v not in ("Sin datos",):
-                return "background-color: #FFEB9C; color: #7A5200"
-            return ""
-
-        estado = [c for c in visibles if c.endswith("cumple") or c in ("Calidad", "Revisar")]
-        formato = {c: "{:.4f}" for c in ("Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel")}
-        formato.update({c: "{:.2f}" for c in visibles if c.endswith("(%)")})
-        formato["px_harina_usados"] = "{:.0f}"
-        st.markdown("**Detalle por muestra**")
-        st.dataframe(res_eval[visibles].style.map(colorear, subset=estado).format(formato, na_rep=""),
-                     use_container_width=True, hide_index=True,
-                     column_config={"Revisar": st.column_config.TextColumn(width="medium"),
-                                    "Motivo": st.column_config.TextColumn(width="large")})
-
-        info = {
-            "Fecha de procesamiento": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "Capturas procesadas": len(imagenes),
-            "Muestras": len(res_eval),
-            "Segmentación": "Otsu local por plato, erosión de 25 px del borde, recorte de percentiles 2-98",
-            "Normalización": "Mediana de la harina dividida entre el blanco de la bandeja alrededor del plato (_rel)",
-            "Modelo": ", ".join(modelos) if params else "Sin modelo (solo datos de bandas)",
-        }
-        for p, (tl, lim) in limites.items():
-            info[f"Límite {p}"] = f"{'≥' if tl == 'min' else '≤'} {lim} %"
-        info["Nota"] = "Valores estimados; no reemplazan el análisis de laboratorio certificado."
-
-        b1, b2 = st.columns(2)
-        b1.download_button("Descargar resultados en Excel",
-                           generar_excel(res_eval, st.session_state["descripcion"], info,
-                                         [re.sub(r"\*\*", "", l) for l in lineas]),
-                           f"calidad_harina_{datetime.now():%Y%m%d_%H%M}.xlsx",
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-        b2.download_button("Descargar imágenes de control (ZIP)", zip_imagenes(imagenes),
-                           f"segmentacion_{datetime.now():%Y%m%d_%H%M}.zip", "application/zip")
-
-with st.expander("Qué contiene el Excel"):
-    st.markdown(
-        "- **Resultados:** una fila por muestra con su carpeta, número, posición en la bandeja (FxCy), "
-        "una columna **Revisar** (plato vacío, harina cortada por el borde de la foto, etc.), los píxeles de harina "
-        "usados y, por banda, la reflectancia relativa al blanco (`_rel`) y su variación (`_cv`). También trae las "
-        "variables derivadas (logaritmos y diferencias normalizadas entre bandas) y, si hay modelo, la estimación de "
-        "cada parámetro, si cumple y la calidad general.\n"
-        "- **Descripción de capturas:** lo que se indicó en el paso 2 para cada foto.\n"
-        "- **Información:** fecha, método y límites usados."
-    )
-
-# ---------------------------------------------------------------------------
-# Información del proyecto
-# ---------------------------------------------------------------------------
-st.divider()
-st.header("¿Cómo funciona?")
-p1, p2, p3, p4 = st.columns(4)
-p1.markdown("**1. Captura**\n\nSe fotografían las muestras con un dron **DJI Mavic 3 Multispectral**: "
-            "Verde (560 nm), Rojo (650 nm), Red Edge (730 nm) e Infrarrojo cercano (860 nm).")
-p2.markdown("**2. Calibración**\n\nSe corrige el viñeteado, el nivel negro, la ganancia y la exposición de cada "
-            "banda, y se normaliza con el blanco de la bandeja que rodea cada plato.")
-p3.markdown("**3. Segmentación**\n\nSe ubica cada plato y se separa solo la harina, descartando el borde, "
-            "el plástico, la mesa y los píxeles extremos (brillos o polvo).")
-p4.markdown("**4. Resultado**\n\nSe calculan las variables espectrales de cada muestra y, si hay modelo, "
-            "se estima su calidad y se compara con la especificación.")
-
-with st.expander("Datos y entrenamiento"):
-    st.markdown(
-        "- Los modelos se entrenan con **contramuestras de cerca de 300 lotes de producción**, cada una con su "
-        "resultado de laboratorio certificado.\n"
-        "- Se evalúan con validación **dejando una captura completa fuera**, para medir cómo funcionaría el modelo "
-        "con una foto nueva.\n"
-        "- La referencia metodológica es una tesis que predice estos parámetros con imágenes **hiperespectrales** "
-        "e inteligencia artificial."
-    )
-with st.expander("Alcance y limitaciones"):
-    st.markdown(
-        "- El Mavic 3M registra **4 bandas**, frente a las cerca de 240 de una cámara hiperespectral, por lo que la "
-        "precisión esperada es bastante menor.\n"
-        "- Los resultados son **estimaciones experimentales** y no reemplazan el análisis de laboratorio certificado.\n"
-        "- El proyecto está en desarrollo: los modelos se actualizan a medida que se incorporan más datos."
-    )
-st.caption(f"Proyectos de Mecanica Electrica · {INSTITUCION}")
+D.hallazgos()
+D.cierre(INSTITUCION)

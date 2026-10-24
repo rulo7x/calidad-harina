@@ -178,15 +178,16 @@ def portada(institucion):
     <a href="#como-funciona">Cómo funciona</a>
     <a href="#resultados">Resultados</a>
     <a href="#analizar">Herramienta</a>
-    <a class="pill" href="#analizar">Analizar muestras</a>
+    <a class="pill" href="#analizar">Enviar capturas</a>
   </div>
 </div></div>
 <div class="cont"><div class="hero">
   <div>
-    <h1>Controle la calidad de su harina de pescado <span class="v">con una sola foto de dron</span></h1>
-    <p>Fotografiamos las muestras con un dron multiespectral, separamos la harina de todo lo demás y estimamos
-    proteína, grasa, humedad y cenizas antes de que llegue el resultado del laboratorio.</p>
-    <a class="pill grande" href="#analizar">Empieza ahora</a>
+    <h1>Conozca el grado de su harina de pescado <span class="v">a partir de las fotos de su dron</span></h1>
+    <p>Usted nos envía las capturas multiespectrales de sus muestras. Separamos la harina de todo lo demás,
+    estimamos proteína, grasa, humedad y cenizas, y clasificamos cada muestra según los grados comerciales
+    de la harina de pescado peruana.</p>
+    <a class="pill grande" href="#analizar">Enviar capturas</a>
   </div>
   <div class="hero-foto">
     <img src="{img}" alt="Bandeja con muestras de harina segmentadas"/>
@@ -199,16 +200,16 @@ def portada(institucion):
 
 def como_funciona():
     fondo = _b64("fondo.jpg")
-    pasos = [("dron", "Captura", "Dron DJI Mavic 3M en verde, rojo, red edge e infrarrojo"),
+    pasos = [("dron", "Recepción", "Capturas del DJI Mavic 3M en verde, rojo, red edge e infrarrojo"),
              ("luz", "Calibración", "Corregimos la luz con el blanco de la propia bandeja"),
              ("seg", "Segmentación", "Cada plato por separado, solo la harina"),
-             ("excel", "Resultado", "Un Excel con cada muestra, su estimación y el motivo")]
+             ("excel", "Resultado", "Un Excel con cada muestra, su estimación y su grado")]
     items = "".join(f'<div class="p">{_svg(IC[i])}<b>{t}</b><small>{d}</small></div>' for i, t, d in pasos)
     st.markdown(f"""
 <div class="banda-foto" id="como-funciona" style="background-image:url('{fondo}')"><div class="cont">
   <div class="vidrio">
     <h2>De la bandeja al Excel en cuatro pasos</h2>
-    <p>Usamos exactamente el mismo proceso con el que entrenamos el modelo, para que los números de sus fotos
+    <p>Sus capturas pasan por el mismo proceso con el que entrenamos el modelo, para que los números
     sean comparables con los de laboratorio.</p>
   </div>
   <div class="pasos">{items}</div>
@@ -230,9 +231,9 @@ def como_funciona():
 def cabecera_herramienta():
     st.markdown("""
 <div class="cont" id="analizar"><div class="titulo">
-  <h2>Analice sus muestras <span class="v">en minutos</span></h2>
-  <p>Suba las capturas del dron, indique qué hay en cada foto y revise la segmentación antes de descargar
-  el Excel. Todo el procesamiento ocurre en esta página.</p>
+  <h2>Envíe sus capturas <span class="v">y reciba el grado de cada muestra</span></h2>
+  <p>Suba las capturas del dron e indique qué hay en cada foto. Nosotros segmentamos, estimamos y
+  clasificamos cada muestra con la especificación comercial de la harina peruana.</p>
 </div></div>
 """, unsafe_allow_html=True)
 
@@ -253,8 +254,8 @@ def hallazgos():
   <div class="lado">
     <h2>Lo que aprendimos con 285 muestras</h2>
     <p>Preferimos mostrar los números como son. Las estimaciones son experimentales y no reemplazan el
-    análisis de laboratorio certificado; el veredicto de calidad se marca como parcial hasta confirmar los
-    límites de la planta.</p>
+    análisis de laboratorio certificado. El grado se asigna con la especificación comercial peruana usando
+    solo los cuatro parámetros que estima el modelo.</p>
   </div>
   <div class="grid-h">{grid}</div>
 </div></div>
@@ -266,8 +267,8 @@ def cierre(institucion):
     st.markdown(f"""
 <div class="cont"><div class="cta">
   <img src="{img}" alt="Muestras segmentadas"/>
-  <div><h3>¿Tiene capturas nuevas? <span class="v">Súmelas al proyecto.</span></h3>
-  <a class="pill grande" href="#analizar">Empieza ahora</a></div>
+  <div><h3>¿Tiene capturas nuevas? <span class="v">Envíelas y reciba su clasificación.</span></h3>
+  <a class="pill grande" href="#analizar">Enviar capturas</a></div>
 </div></div>
 <div class="pie"><div class="cont">
   <div class="col"><div class="logo">harina<b class="v">scan</b></div>

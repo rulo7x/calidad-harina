@@ -37,25 +37,27 @@ import procesamiento as P
 INSTITUCION = "Universidad de Piura"
 MODELO_REPO = Path(__file__).parent / "modelo_calidad.joblib"
 
-# Límites de especificación por defecto (los nombres deben coincidir con los del modelo)
-LIMITES_DEF = {
-    "Proteína": ("min", 65.0),
-    "Grasa": ("max", 10.0),
-    "Humedad": ("max", 10.0),
-    "Ceniza": ("max", 16.0),
-}
-# Mientras no se conozcan los límites reales de la planta, el veredicto se marca como parcial.
-# Cuando pongas la especificación real en LIMITES_DEF, cambia esto a True.
-LIMITES_CONFIRMADOS = False
-SUF = "" if LIMITES_CONFIRMADOS else " (parcial)"
-REF = "" if LIMITES_CONFIRMADOS else " referencial"
-CONF, NOCONF = "Conforme" + SUF, "No conforme" + SUF
-AVISO_PARCIAL = ("Resultado parcial: todavía no se conocen los límites reales de la especificación. "
-                 "Los límites usados son referenciales, así que el veredicto Conforme / No conforme puede "
-                 "cambiar cuando se definan los límites de la planta.")
+# Especificación comercial de la harina de pescado peruana (grados de exportación).
+# Fuente: fichas de especificación publicadas por productores peruanos (Pelayo y Copeinca).
+# Solo se usan los cuatro parámetros que estima el modelo; el resto (TBVN, histamina, AGL,
+# cloruros y arena) requiere laboratorio. None = el grado no fija límite para ese parámetro.
+GRADOS = [
+    # grado,        proteína mín, grasa máx, humedad máx, ceniza máx
+    ("Super Prime", 68.0, 10.0, 10.0, 14.0),
+    ("Prime",       67.0, 10.0, 10.0, 15.0),
+    ("Taiwán",      67.0, 10.0, 10.0, 17.0),
+    ("Tailandia",   66.0, 10.0, 10.0, 17.0),
+    ("Standard",    65.0, 12.0, 10.0, None),
+]
+FUENTE_GRADOS = ("Especificación comercial de la harina de pescado peruana: grados Super Prime, Prime, "
+                 "Taiwán, Tailandia y Standard (fichas técnicas de Pesquera Pelayo y Copeinca).")
+REGLAS = {"Proteína": (1, "min"), "Grasa": (2, "max"), "Humedad": (3, "max"), "Ceniza": (4, "max")}
+FUERA = "Fuera de especificación"
+NO_EVALUADOS = "TBVN, histamina, ácidos grasos libres, cloruros y arena"
 TIPOS = ["Varias muestras (grilla)", "Una muestra"]
 
-VERDE, ROJO, AMBAR, GRIS = (PatternFill("solid", start_color=c) for c in ("C6EFCE", "FFC7CE", "FFEB9C", "EDEDED"))
+VERDE, VERDE_CL, ROJO, AMBAR, GRIS = (PatternFill("solid", start_color=c)
+                                     for c in ("C6EFCE", "E2F0D9", "FFC7CE", "FFEB9C", "EDEDED"))
 CABECERA = PatternFill("solid", start_color="1F4E78")
 
 
@@ -133,12 +135,24 @@ def cargar_modelo():
     return b["modelos"], list(b["features"])
 
 
-def cumple(valor, regla):
-    tipo, lim = regla
-    return valor >= lim if tipo == "min" else valor <= lim
+def fallas(valores, grado):
+    """Parámetros en los que una muestra no alcanza un grado: lista de (parámetro, valor, límite, tipo)."""
+    out = []
+    for p, (k, tipo) in REGLAS.items():
+        lim, v = grado[k], valores.get(p)
+        if lim is None or v is None or pd.isna(v):
+            continue
+        if (tipo == "min" and v < lim) or (tipo == "max" and v > lim):
+            out.append((p, v, lim, tipo))
+    return out
 
 
-def evaluar(df, modelos, features, limites):
+def texto_falla(f):
+    p, v, lim, tipo = f
+    return f"{p} {v:.2f} % ({'mín.' if tipo == 'min' else 'máx.'} {lim:g} %)"
+
+
+def evaluar(df, modelos, features):
     res = df.copy()
     if not modelos:
         return res, []
@@ -148,8 +162,6 @@ def evaluar(df, modelos, features, limites):
                    f"({', '.join(faltan[:5])}...). Se entregan solo los datos de las bandas.")
         return res, []
     ok = res["seg_ok"].fillna(False).astype(bool) & res[features].notna().all(axis=1)
-    general = pd.Series(True, index=res.index)
-    motivos = pd.Series([[] for _ in range(len(res))], index=res.index)
     params = []
     for p, mdl in modelos.items():
         col = f"{p} estimada (%)"
@@ -157,66 +169,73 @@ def evaluar(df, modelos, features, limites):
         if ok.any():
             res.loc[ok, col] = np.round(np.ravel(mdl.predict(res.loc[ok, features])), 2)
         params.append(p)
-        if p in limites:
-            tl, lim = limites[p]
-            c_ok = res[col].apply(lambda v, r=limites[p]: bool(cumple(v, r)) if pd.notna(v) else False)
-            res[f"{p} cumple"] = np.where(ok, np.where(c_ok, "Sí", "No"), "")
-            general &= c_ok
-            for i in res.index[ok & ~c_ok]:
-                v = res.at[i, col]
-                motivos[i] = motivos[i] + [f"{p} {v:.2f} % ({'debajo del mínimo' if tl == 'min' else 'sobre el máximo'}{REF} "
-                                           f"de {lim:g} %)"]
-    res["Calidad"] = np.where(~ok, "Sin datos", np.where(general, CONF, NOCONF))
-    sin_datos = res["Revisar"].fillna("").replace("", "No se pudo medir la harina")
-    res["Motivo"] = np.where(~ok, sin_datos,
-                             np.where(general, "Cumple todos los límites", motivos.apply("; ".join)))
-    res.insert(res.columns.get_loc("Calidad") + 1, "Motivo", res.pop("Motivo"))
+
+    calidad, motivo = [], []
+    for i in res.index:
+        if not ok[i]:
+            calidad.append("Sin datos")
+            motivo.append(res.at[i, "Revisar"] or "No se pudo medir la harina")
+            continue
+        valores = {p: res.at[i, f"{p} estimada (%)"] for p in params}
+        for j, g in enumerate(GRADOS):
+            if not fallas(valores, g):
+                calidad.append(g[0])
+                if j == 0:
+                    motivo.append("Cumple el grado más alto")
+                else:
+                    sup = GRADOS[j - 1]
+                    motivo.append(f"No llega a {sup[0]} por " + "; ".join(texto_falla(f) for f in fallas(valores, sup)))
+                break
+        else:
+            calidad.append(FUERA)
+            motivo.append("No cumple Standard por " + "; ".join(texto_falla(f) for f in fallas(valores, GRADOS[-1])))
+    res["Calidad"] = calidad
+    res["Motivo"] = motivo
+    pos = res.columns.get_loc("Revisar")
+    for c in ("Motivo", "Calidad"):
+        res.insert(pos, c, res.pop(c))
     return res, params
 
 
-def conclusiones(res, params, limites):
-    """Resumen en texto de por qué las muestras salen conformes o no conformes."""
+def conclusiones(res, params):
+    """Resumen en texto de la clasificación por grado y de qué la limita."""
     if not params:
         return []
     medidas = res[res["Calidad"] != "Sin datos"]
-    n, n_no = len(medidas), int((medidas["Calidad"] == NOCONF).sum())
-    lineas = [] if LIMITES_CONFIRMADOS else [f"**{AVISO_PARCIAL.split(':')[0]}:**{AVISO_PARCIAL.split(':', 1)[1]}"]
+    n = len(medidas)
     if n == 0:
-        return ["No se pudo medir ninguna muestra, así que no hay veredicto de calidad."]
-    if n_no == 0:
-        lineas.append(f"Las {n} muestras medidas cumplen todos los límites de la especificación.")
-    else:
-        lineas.append(f"{n_no} de {n} muestras medidas salen **no conformes**: cada una tiene al menos un parámetro "
-                      "estimado fuera de la especificación.")
-    causas = {}
-    for p in params:
-        if p not in limites or f"{p} cumple" not in medidas:
+        return ["No se pudo medir ninguna muestra, así que no hay clasificación."]
+    cuenta = medidas["Calidad"].value_counts()
+    orden = [g[0] for g in GRADOS] + [FUERA]
+    reparto = ", ".join(f"{int(cuenta[g])} {g}" for g in orden if g in cuenta)
+    lineas = [f"De {n} muestras medidas: {reparto}."]
+    # qué parámetro impide subir de grado con más frecuencia
+    limita = {}
+    for _, r in medidas.iterrows():
+        valores = {p: r[f"{p} estimada (%)"] for p in params}
+        j = orden.index(r["Calidad"])
+        if j == 0:
             continue
-        tl, lim = limites[p]
-        fallan = medidas[medidas[f"{p} cumple"] == "No"]
-        if len(fallan):
-            causas[p] = len(fallan)
-            lado = ("por debajo del mínimo" if tl == "min" else "por encima del máximo") + REF
-            lineas.append(f"**{p}:** {len(fallan)} muestra(s) quedan {lado} de {lim:g} %. "
-                          f"El valor estimado va de {medidas[f'{p} estimada (%)'].min():.2f} a "
-                          f"{medidas[f'{p} estimada (%)'].max():.2f} % (promedio "
-                          f"{medidas[f'{p} estimada (%)'].mean():.2f} %).")
-    if causas and n_no:
-        principal, cuenta = max(causas.items(), key=lambda kv: kv[1])
-        if cuenta == n_no:
-            sin = medidas[[c for c in medidas if c.endswith("cumple") and not c.startswith(principal)]]
-            pasarian = int((sin == "Sí").all(axis=1).sum())
-            lineas.append(f"La causa común es **{principal}**: todas las no conformes fallan en ese parámetro. "
-                          f"Si solo se evaluaran los demás parámetros, {pasarian} de {n} cumplirían.")
-        rango = {p: medidas[f"{p} estimada (%)"].max() - medidas[f"{p} estimada (%)"].min() for p in causas}
-        if all(v < 1.5 for v in rango.values()):
-            lineas.append("El modelo estima valores muy parecidos para todas las muestras, por lo que el veredicto "
-                          "depende sobre todo de dónde cae ese promedio respecto al límite, más que de diferencias "
-                          "reales entre lotes.")
+        for p, *_ in fallas(valores, GRADOS[j - 1]):
+            limita[p] = limita.get(p, 0) + 1
+    if limita:
+        p, k = max(limita.items(), key=lambda kv: kv[1])
+        col = f"{p} estimada (%)"
+        lineas.append(f"Lo que más limita el grado es **{p}**: frena a {k} muestra(s). Su valor estimado va de "
+                      f"{medidas[col].min():.2f} a {medidas[col].max():.2f} % (promedio {medidas[col].mean():.2f} %).")
+    rangos = [medidas[f"{p} estimada (%)"].max() - medidas[f"{p} estimada (%)"].min() for p in params]
+    if n > 2 and all(v < 1.5 for v in rangos):
+        lineas.append("El modelo estima valores muy parecidos para todas las muestras, así que el grado depende sobre "
+                      "todo de dónde cae ese promedio respecto a los límites, más que de diferencias reales entre lotes.")
+    sin = [p for p in REGLAS if p not in params]
+    if sin:
+        lineas.append(f"El modelo no estima {', '.join(sin)}, por lo que ese parámetro no entra en la clasificación.")
     n_sd = int((res["Calidad"] == "Sin datos").sum())
     if n_sd:
         lineas.append(f"{n_sd} posición(es) quedaron **sin datos** porque no se encontró harina; revise la columna Motivo.")
-    lineas.append("Las estimaciones son experimentales y no reemplazan el análisis de laboratorio certificado.")
+    lineas.append(f"El grado se asigna solo con proteína, grasa, humedad y cenizas estimadas; {NO_EVALUADOS} "
+                  "requieren análisis de laboratorio. Las estimaciones son experimentales y no reemplazan el "
+                  "análisis certificado.")
     return lineas
 
 
@@ -250,9 +269,10 @@ def generar_excel(res, descripcion, info, lineas=None) -> bytes:
                     c.number_format = "0.0000"
                 elif cab.endswith("(%)"):
                     c.number_format = "0.00"
-                if cab.endswith("cumple") or cab == "Calidad":
+                if cab == "Calidad":
                     c.alignment = Alignment(horizontal="center")
-                    c.fill = {"Sí": VERDE, CONF: VERDE, "No": ROJO, NOCONF: ROJO}.get(c.value, GRIS)
+                    c.fill = {"Super Prime": VERDE, "Prime": VERDE, "Taiwán": VERDE_CL, "Tailandia": VERDE_CL,
+                              "Standard": VERDE_CL, FUERA: ROJO}.get(c.value, GRIS)
                 if cab == "Revisar" and c.value:
                     c.fill = AMBAR
     return buf.getvalue()
@@ -270,7 +290,7 @@ def zip_imagenes(imagenes) -> bytes:
 # ---------------------------------------------------------------------------
 # Herramienta de análisis
 # ---------------------------------------------------------------------------
-def herramienta(modelos, features, limites):
+def herramienta(modelos, features):
     """Pasos 1 a 4: subir, describir, procesar y descargar."""
     st.markdown('<span class="marca-herramienta"></span>', unsafe_allow_html=True)
 
@@ -419,41 +439,41 @@ def herramienta(modelos, features, limites):
 
             # --- Paso 4: resultados ---------------------------------------------------
             st.markdown('<h3 class="paso-t">4. Resultados</h3>', unsafe_allow_html=True)
-            res_eval, params = evaluar(res, modelos, features, limites)
+            res_eval, params = evaluar(res, modelos, features)
             n_rev = int((res_eval["Revisar"].fillna("") != "").sum())
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Muestras", len(res_eval))
             k2.metric("Para revisar", n_rev)
             if params:
-                k3.metric("Conformes" + SUF, int((res_eval["Calidad"] == CONF).sum()))
-                k4.metric("No conformes" + SUF, int((res_eval["Calidad"] == NOCONF).sum()))
-                if not LIMITES_CONFIRMADOS:
-                    st.warning(AVISO_PARCIAL)
+                altos = int(res_eval["Calidad"].isin(["Super Prime", "Prime"]).sum())
+                k3.metric("Super Prime o Prime", altos)
+                k4.metric(FUERA, int((res_eval["Calidad"] == FUERA).sum()))
 
             visibles = ["Carpeta", "Muestra", "Pocillo", "Revisar", "px_harina_usados",
                         "Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel"]
-            visibles += [c for c in res_eval if c.endswith(("estimada (%)", "cumple")) or c in ("Calidad", "Motivo")]
+            visibles += [c for c in res_eval if c.endswith("estimada (%)") or c in ("Calidad", "Motivo")]
             # Calidad y Motivo primero, para que el porqué se vea sin desplazarse
             if params:
                 visibles = ["Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo"] + \
                     [c for c in visibles if c not in ("Carpeta", "Muestra", "Pocillo", "Calidad", "Motivo")]
 
-            lineas = conclusiones(res_eval, params, limites)
+            lineas = conclusiones(res_eval, params)
             if lineas:
                 st.subheader("Conclusión")
-                en_pagina = lineas if LIMITES_CONFIRMADOS else lineas[1:]  # el aviso ya se muestra arriba
-                st.markdown("\n".join(f"- {l}" for l in en_pagina))
+                st.markdown("\n".join(f"- {l}" for l in lineas))
 
             def colorear(v):
-                if v in ("Sí", CONF):
+                if v in ("Super Prime", "Prime"):
                     return "background-color: #C6EFCE; color: #006100"
-                if v in ("No", NOCONF):
+                if v in ("Taiwán", "Tailandia", "Standard"):
+                    return "background-color: #E2F0D9; color: #375623"
+                if v == FUERA:
                     return "background-color: #FFC7CE; color: #9C0006"
-                if isinstance(v, str) and v and v not in ("Sin datos",):
+                if isinstance(v, str) and v and v != "Sin datos":
                     return "background-color: #FFEB9C; color: #7A5200"
                 return ""
 
-            estado = [c for c in visibles if c.endswith("cumple") or c in ("Calidad", "Revisar")]
+            estado = [c for c in visibles if c in ("Calidad", "Revisar")]
             formato = {c: "{:.4f}" for c in ("Green_rel", "Red_rel", "RedEdge_rel", "NIR_rel")}
             formato.update({c: "{:.2f}" for c in visibles if c.endswith("(%)")})
             formato["px_harina_usados"] = "{:.0f}"
@@ -471,10 +491,11 @@ def herramienta(modelos, features, limites):
                 "Normalización": "Mediana de la harina dividida entre el blanco de la bandeja alrededor del plato (_rel)",
                 "Modelo": ", ".join(modelos) if params else "Sin modelo (solo datos de bandas)",
             }
-            for p, (tl, lim) in limites.items():
-                info[f"Límite{REF} {p}"] = f"{'≥' if tl == 'min' else '≤'} {lim} %"
-            info["Estado de los límites"] = ("Confirmados" if LIMITES_CONFIRMADOS
-                                              else "Referenciales, no confirmados: resultado parcial")
+            info["Clasificación"] = FUENTE_GRADOS
+            for g in GRADOS:
+                info[f"Grado {g[0]}"] = (f"proteína ≥ {g[1]:g} %, grasa ≤ {g[2]:g} %, humedad ≤ {g[3]:g} %, "
+                                         + (f"cenizas ≤ {g[4]:g} %" if g[4] is not None else "cenizas sin límite"))
+            info["No evaluados"] = f"{NO_EVALUADOS} (requieren laboratorio)"
             info["Nota"] = "Valores estimados; no reemplazan el análisis de laboratorio certificado."
 
             b1, b2 = st.columns(2)
@@ -492,9 +513,9 @@ def herramienta(modelos, features, limites):
             "una columna **Revisar** (plato vacío, harina cortada por el borde de la foto, etc.), los píxeles de harina "
             "usados y, por banda, la reflectancia relativa al blanco (`_rel`) y su variación (`_cv`). También trae las "
             "variables derivadas (logaritmos y diferencias normalizadas entre bandas) y, si hay modelo, la estimación de "
-            "cada parámetro, si cumple y la calidad general.\n"
+            "cada parámetro, el grado comercial estimado y el motivo.\n"
             "- **Descripción de capturas:** lo que se indicó en el paso 2 para cada foto.\n"
-            "- **Información:** fecha, método y límites usados."
+            "- **Información:** fecha, método y la especificación de cada grado."
         )
 
 
@@ -516,18 +537,17 @@ except Exception as e:
 
 D.cabecera_herramienta()
 with st.container(border=True, key="herramienta"):
-    with st.expander("Especificación de calidad" + ("" if LIMITES_CONFIRMADOS else " (límites referenciales)")):
-        st.caption("Límites contra los que se compara cada estimación para indicar si cumple.")
-        if not LIMITES_CONFIRMADOS:
-            st.caption("Aún no se conocen los límites reales de la planta, por eso el veredicto de calidad es parcial.")
-        limites = {}
-        cols = st.columns(len(LIMITES_DEF))
-        for c, (p, (tipo_l, val)) in zip(cols, LIMITES_DEF.items()):
-            etiqueta = f"{p} {'mínimo' if tipo_l == 'min' else 'máximo'} (%)"
-            limites[p] = (tipo_l, c.number_input(etiqueta, value=val, step=0.5))
+    with st.expander("Especificación usada para clasificar"):
+        st.caption(FUENTE_GRADOS + " Es fija: no se modifica desde la página.")
+        st.table(pd.DataFrame(
+            [{"Grado": g[0], "Proteína mín. (%)": f"{g[1]:g}", "Grasa máx. (%)": f"{g[2]:g}",
+              "Humedad máx. (%)": f"{g[3]:g}", "Cenizas máx. (%)": "Sin límite" if g[4] is None else f"{g[4]:g}"}
+             for g in GRADOS]).set_index("Grado"))
+        st.caption(f"Se clasifica con los cuatro parámetros que estima el modelo. {NO_EVALUADOS} "
+                   "también forman parte de la especificación, pero solo se miden en laboratorio.")
     if not modelos:
         st.info("Todavía no hay modelo cargado: se entregarán solo los datos de las bandas.")
-    herramienta(modelos, features, limites)
+    herramienta(modelos, features)
 
 D.hallazgos()
 D.cierre(INSTITUCION)

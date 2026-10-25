@@ -308,9 +308,7 @@ def herramienta(modelos, features):
             "de 4 × 4 platos). Eso lo indica en el paso 2."
         )
     with g2:
-        st.code("capturas.zip\n├── 1/\n│   ├── DJI_..._MS_G.TIF\n│   ├── DJI_..._MS_R.TIF\n"
-                "│   ├── DJI_..._MS_RE.TIF\n│   └── DJI_..._MS_NIR.TIF\n├── 2/\n│   └── ...\n└── 3/\n    └── ...",
-                language=None)
+        st.markdown(D.vista_carpetas(), unsafe_allow_html=True)
 
     subidos = st.file_uploader("ZIP con las capturas, o los 4 TIFF de una captura",
                                type=["zip", "tif", "tiff"], accept_multiple_files=True)

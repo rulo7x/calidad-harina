@@ -279,3 +279,42 @@ def cierre(institucion):
   <div class="legal">© 2026 PME Grupo 09 · {institucion}. Estimaciones experimentales con fines de investigación.</div>
 </div></div>
 """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Vista de carpeta del ZIP esperado (paso 1 de la herramienta)
+# ---------------------------------------------------------------------------
+_CARPETA = ('<svg width="20" height="20" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5'
+            'a2 2 0 0 1-2-2z" fill="{a}"/><path d="M3 9h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="{b}"/></svg>')
+_ARCHIVO = ('<svg width="16" height="18" viewBox="0 0 16 20"><path d="M2 1h8l5 5v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 '
+            '1-1z" fill="#fff" stroke="#9AA5A0"/><path d="M10 1v5h5" fill="none" stroke="#9AA5A0"/></svg>')
+_CSS_ARBOL = """<style>
+.arbol{border:1px solid #E3E8E5;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(13,74,50,.06);background:#fff}
+.arbol .bar{background:#F4F6F5;padding:9px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #E3E8E5}
+.arbol .bar i{display:inline-block;width:9px;height:9px;border-radius:50%;background:#D6DCD9;margin-right:2px}
+.arbol .ruta{background:#fff;border:1px solid #E3E8E5;border-radius:8px;padding:2px 10px;flex:1;font-size:13px;color:#555}
+.arbol .lista{padding:10px 6px 12px;font-size:14px}
+.arbol .fila{display:flex;align-items:center;gap:9px;padding:4px 8px;border-radius:8px;line-height:1.4}
+.arbol .fila:hover{background:#F1FAF4}
+.arbol .n2{padding-left:46px}
+.arbol .car{width:10px;color:#999;font-size:10px}
+.arbol small{margin-left:auto;color:#999;font-size:12px}
+.arbol .tag{margin-left:auto;font-size:11px;font-weight:600;color:#fff;border-radius:4px;padding:1px 6px;white-space:nowrap}
+.arbol .G{background:#2FB45A}.arbol .R{background:#D9534F}.arbol .RE{background:#C77B2B}.arbol .NIR{background:#7A4FB5}
+.arbol .dim{color:#aaa}
+</style>"""
+
+
+def vista_carpetas():
+    """HTML con la estructura del ZIP esperado, dibujada como un explorador de archivos."""
+    carpeta = _CARPETA.format(a="#F5C451", b="#F9D56E")
+    gris = _CARPETA.format(a="#DDDDDD", b="#E8E8E8")
+    bandas = [("G", "G", "Verde"), ("R", "R", "Rojo"), ("RE", "RE", "Red edge"), ("NIR", "NIR", "NIR")]
+    filas = [f'<div class="fila"><span class="car">▼</span>{carpeta}<b>1</b><small>4 archivos</small></div>']
+    filas += [f'<div class="fila n2">{_ARCHIVO}DJI_…_MS_{s}.TIF<span class="tag {c}">{t}</span></div>'
+              for s, c, t in bandas]
+    filas += [f'<div class="fila"><span class="car">▶</span>{carpeta}<b>{k}</b><small>4 archivos</small></div>'
+              for k in (2, 3)]
+    filas.append(f'<div class="fila dim"><span class="car"></span>{gris}…</div>')
+    return (_CSS_ARBOL + '<div class="arbol"><div class="bar"><span><i></i><i></i><i></i></span>'
+            '<span class="ruta">capturas.zip</span></div><div class="lista">' + "".join(filas) + "</div></div>")

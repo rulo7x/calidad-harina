@@ -296,7 +296,7 @@ def herramienta(modelos, features):
 
     # --- Paso 1: guía y subida ------------------------------------------------------
     st.markdown('<h3 class="paso-t">1. Prepare y suba sus fotos</h3>', unsafe_allow_html=True)
-    g1, g2 = st.columns(2)
+    g1, g2 = st.columns(2, vertical_alignment="center")
     with g1:
         st.markdown(
             "Cada captura del Mavic 3M son **4 archivos TIFF** (`_MS_G`, `_MS_R`, `_MS_RE`, `_MS_NIR`). "

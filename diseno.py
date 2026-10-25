@@ -242,8 +242,8 @@ def hallazgos():
     v = "#9BE58A"
     items = [
         ("grafico", "R² de 0.136 en cenizas", "El mejor modelo fue PLSR de 4 componentes. Cenizas es el parámetro con más señal: error típico de 1.01 puntos frente a una variación natural de 1.09."),
-        ("luz", "La luz pesaba más que la harina", "En la banda verde, la foto explicaba el 94 % de la variación. Comparar cada plato con el blanco de su bandeja lo bajó a 22 %."),
-        ("seg", "Solo píxeles de harina", "Hasta un 35 % de cada recuadro era plástico, borde o mesa. Ahora se mide únicamente la harina."),
+        ("luz", "Corrección de la luz", "Sin corregir, la iluminación de cada foto explica el 94 % de la variación en la banda verde. Al comparar cada plato con el blanco de su bandeja, ese efecto queda en 22 %."),
+        ("seg", "Solo píxeles de harina", "Hasta un 35 % de cada recuadro puede ser plástico, borde o mesa. La segmentación descarta esos píxeles y mide únicamente la harina."),
         ("check", "Validación exigente", "Cada foto se predice con un modelo que nunca la vio. Así medimos cómo funcionaría con una captura nueva."),
         ("ondas", "El límite está en el sensor", "Proteína, grasa y agua se detectan mejor entre 1100 y 2500 nm. El Mavic 3M llega hasta 860 nm."),
         ("lupa", "Siguiente paso", "Un sensor NIR o hiperespectral, captura estandarizada y más rumas con resultado de laboratorio."),

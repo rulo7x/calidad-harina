@@ -536,7 +536,7 @@ except Exception as e:
 D.cabecera_herramienta()
 with st.container(border=True, key="herramienta"):
     with st.expander("Especificación usada para clasificar"):
-        st.caption(FUENTE_GRADOS + " Es fija: no se modifica desde la página.")
+        st.caption(FUENTE_GRADOS)
         st.table(pd.DataFrame(
             [{"Grado": g[0], "Proteína mín. (%)": f"{g[1]:g}", "Grasa máx. (%)": f"{g[2]:g}",
               "Humedad máx. (%)": f"{g[3]:g}", "Cenizas máx. (%)": "Sin límite" if g[4] is None else f"{g[4]:g}"}

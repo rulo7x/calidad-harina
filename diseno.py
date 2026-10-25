@@ -289,12 +289,12 @@ _CARPETA = ('<svg width="20" height="20" viewBox="0 0 24 24"><path d="M3 6a2 2 0
 _ARCHIVO = ('<svg width="16" height="18" viewBox="0 0 16 20"><path d="M2 1h8l5 5v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 '
             '1-1z" fill="#fff" stroke="#9AA5A0"/><path d="M10 1v5h5" fill="none" stroke="#9AA5A0"/></svg>')
 _CSS_ARBOL = """<style>
-.arbol{border:1px solid #E3E8E5;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(13,74,50,.06);background:#fff}
-.arbol .bar{background:#F4F6F5;padding:9px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #E3E8E5}
+.arbol{margin-top:22px;border:1px solid #E3E8E5;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(13,74,50,.06);background:#fff}
+.arbol .bar{background:#F4F6F5;padding:11px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #E3E8E5}
 .arbol .bar i{display:inline-block;width:9px;height:9px;border-radius:50%;background:#D6DCD9;margin-right:2px}
 .arbol .ruta{background:#fff;border:1px solid #E3E8E5;border-radius:8px;padding:2px 10px;flex:1;font-size:13px;color:#555}
-.arbol .lista{padding:10px 6px 12px;font-size:14px}
-.arbol .fila{display:flex;align-items:center;gap:9px;padding:4px 8px;border-radius:8px;line-height:1.4}
+.arbol .lista{padding:14px 8px 16px;font-size:15px}
+.arbol .fila{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:8px;line-height:1.4}
 .arbol .fila:hover{background:#F1FAF4}
 .arbol .n2{padding-left:46px}
 .arbol .car{width:10px;color:#999;font-size:10px}

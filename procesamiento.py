@@ -10,7 +10,6 @@ entrenamiento (dataset_segmentado_v3.xlsx).
 Requiere analisis_harina_pescado.py en la misma carpeta.
 """
 
-import itertools
 from pathlib import Path
 
 import cv2
@@ -19,6 +18,7 @@ import pandas as pd
 from PIL import Image
 
 import analisis_harina_pescado as A
+from extraccion import calcular_variables, extraer_caracteristicas
 
 
 def leer_lista(texto):
@@ -184,27 +184,13 @@ def segmentar(L, caja):
     anillo = (d2 > 0) & (d1 == 0) & (rel_g > 0.5)
     f = {"px_harina_usados": int(nucleo.sum()),
          "toca_borde_foto": bool(x <= 2 or y <= 2 or x + w >= W - 2 or y + h >= H - 2)}
-    for b in B:
-        v = L[b][nucleo]
-        lo, hi = np.percentile(v, [2, 98])
-        v = v[(v >= lo) & (v <= hi)]
-        r = L[b][anillo]
-        blanco = np.median(r[r >= np.percentile(r, 50)]) if r.size else np.nan
-        f[f"{b}_rel"] = np.median(v) / blanco
-        f[f"{b}_cv"] = v.std() / v.mean()
+    f.update(extraer_caracteristicas(L, nucleo, anillo))
     return f, nucleo
 
 
 def variables(df):
-    """Mismas variables que mejorar_modelos_v2.variables(): log de cada banda,
-    las 6 diferencias normalizadas y los coeficientes de variación."""
-    R = {b: df[f"{b}_rel"].values for b in B}
-    F = pd.DataFrame({f"log_{b}": np.log(R[b]) for b in B}, index=df.index)
-    for a, b in itertools.combinations(B, 2):
-        F[f"ND_{a}_{b}"] = (R[a] - R[b]) / (R[a] + R[b])
-    for b in B:
-        F[f"cv_{b}"] = df[f"{b}_cv"].values
-    return F
+    """Conserva el nombre usado por la aplicación y delega al módulo común."""
+    return calcular_variables(df)
 
 
 # --------------------------------------------------------------------------
@@ -247,8 +233,11 @@ def procesar_captura(archivos: dict, nombre: str, cfg: dict):
     for it in items:
         fila = {"Captura": nombre, "Muestra": it["Muestra"], "Pocillo": it["Pocillo"],
                 "Fila": it["Fila"], "Columna": it["Columna"]}
-        f, nucleo = segmentar(L, it["caja"])
+        # El recuadro muestra dónde buscó la web la muestra; el contorno verde
+        # posterior indica los píxeles de harina que realmente midió.
         x0, y0, x1, y1 = it["caja"]
+        cv2.rectangle(vis, (x0, y0), (x1, y1), (255, 140, 0), grosor)
+        f, nucleo = segmentar(L, it["caja"])
         if f is None:
             fila.update({"seg_ok": False, "Revisar": "No se encontró harina"})
             cv2.rectangle(vis, (x0, y0), (x1, y1), (255, 0, 0), grosor)

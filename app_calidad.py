@@ -29,6 +29,7 @@ import streamlit as st
 from openpyxl.styles import Alignment, Font, PatternFill
 
 import diseno as D
+from modelo_utils import es_modelo_demostracion
 import procesamiento as P
 
 # ---------------------------------------------------------------------------
@@ -130,9 +131,11 @@ def mapa_numeracion(filas, columnas, esquina, recorrido, inicio=1):
 
 def cargar_modelo():
     if not MODELO_REPO.exists():
-        return {}, []
+        return {}, [], False
     b = joblib.load(MODELO_REPO)
-    return b["modelos"], list(b["features"])
+    # El paquete actual del entrenamiento real no trae etiqueta y se toma
+    # como real. Los modelos de prueba pueden marcarse con tipo="prueba".
+    return b["modelos"], list(b["features"]), es_modelo_demostracion(b)
 
 
 def fallas(valores, grado):
@@ -425,9 +428,9 @@ def herramienta(modelos, features):
                 st.error("No se obtuvo ninguna muestra. Revise la descripción de las capturas.")
                 return
 
-            st.markdown("Verifique en cada imagen que **el contorno verde quede solo sobre la harina** y que "
-                        "**el número amarillo** corresponda a la muestra correcta. Si algo no calza, corrija la tabla "
-                        "del paso 2 y vuelva a procesar.")
+            st.markdown("Verifique en cada imagen que **el recuadro naranja rodee la muestra**, que **el contorno verde "
+                        "quede solo sobre la harina** y que **el número amarillo** corresponda a la muestra correcta. "
+                        "Si algo no calza, corrija la tabla del paso 2 y vuelva a procesar.")
             nombres = list(imagenes)
             if len(nombres) == 1:
                 st.image(imagenes[nombres[0]], caption=nombres[0], use_container_width=True)
@@ -527,11 +530,14 @@ D.estilos()
 D.portada(INSTITUCION)
 D.como_funciona()
 
-modelos, features = {}, []
+modelos, features, modelo_demostracion = {}, [], False
 try:
-    modelos, features = cargar_modelo()
+    modelos, features, modelo_demostracion = cargar_modelo()
 except Exception as e:
     st.error(f"No se pudo cargar el modelo del repositorio: {e}")
+
+if modelo_demostracion:
+    st.warning("Resultado de demostración — modelo no entrenado con datos reales")
 
 D.cabecera_herramienta()
 with st.container(border=True, key="herramienta"):

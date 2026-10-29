@@ -8,3 +8,4 @@ opencv-python-headless
 pillow
 scipy
 defusedxml
+tifffile

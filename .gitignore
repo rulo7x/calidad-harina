@@ -1,0 +1,3 @@
+.python_userbase/
+__pycache__/
+*.py[cod]
